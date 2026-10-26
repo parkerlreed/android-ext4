@@ -1,4 +1,4 @@
-package com.example.usbext4mount
+package io.github.parkerlreed.usbext4mount
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme

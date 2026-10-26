@@ -1,18 +1,37 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
+// Release signing details live outside version control (see keystore.properties).
+val keystoreProperties = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) file.inputStream().use(::load)
+}
+
 android {
-    namespace = "com.example.usbext4mount"
+    namespace = "io.github.parkerlreed.usbext4mount"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "com.example.usbext4mount"
+        applicationId = "io.github.parkerlreed.usbext4mount"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "2.0"
+        versionCode = 1
+        versionName = "1.0.0"
+    }
+
+    signingConfigs {
+        if (!keystoreProperties.isEmpty) {
+            create("release") {
+                storeFile = file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
     }
 
     buildTypes {
@@ -20,8 +39,8 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
-            // Signed with the debug key so `assembleRelease` yields an installable APK.
-            signingConfig = signingConfigs.getByName("debug")
+            // Without keystore.properties the release APK is left unsigned.
+            signingConfig = signingConfigs.findByName("release")
         }
     }
 

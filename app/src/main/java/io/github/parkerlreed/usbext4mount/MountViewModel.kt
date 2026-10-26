@@ -1,4 +1,4 @@
-package com.example.usbext4mount
+package io.github.parkerlreed.usbext4mount
 
 import android.app.Application
 import android.content.Context

@@ -56,7 +56,7 @@ The default ACLs are inherited, so new folders keep working without running it a
 The app copies [`usbmount.sh`](app/src/main/assets/usbmount.sh) into its private files directory and runs it with `su`. You can also run it by hand:
 
 ```sh
-su -c 'sh /data/data/com.example.usbext4mount/files/usbmount.sh list'
+su -c 'sh /data/data/io.github.parkerlreed.usbext4mount/files/usbmount.sh list'
 #   list                               USB partitions: DEV|SECTORS|TYPE|LABEL|MOUNTPOINT
 #   wait SECS                          wait for a USB EXT4 partition to appear
 #   mount DEV MNT [OPTS] [FSCK] [NAME] mount DEV at MNT; NAME also shows it as /sdcard/NAME
