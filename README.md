@@ -2,7 +2,7 @@
 
 (Auto) Mount external EXT4 USB drives with root.
 
-USB EXT4 Mount is a small Android app that mounts an EXT4 USB drive at a fixed path (`/data/usb` by default) and can also show it to every app as `/sdcard/USB`, so file managers, video players and galleries can use it like normal storage.
+USB EXT4 Mount is a small Android app that mounts an EXT2/3/4 USB drive at a fixed path (`/data/usb` by default) and can also show it to every app as `/sdcard/USB`, so file managers, video players and galleries can use it like normal storage.
 
 ## Requirements
 
