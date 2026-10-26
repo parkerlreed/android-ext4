@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Only covers the window before Compose draws; colors come from AppTheme. -->
+    <style name="Theme.UsbExt4Mount" parent="android:Theme.Material.Light.NoActionBar" />
+</resources>
