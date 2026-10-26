@@ -2,7 +2,7 @@
 
 (Auto) Mount external EXT4 USB drives with root.
 
-USB ext4 Mount is a small Android app that mounts an ext2/3/4 USB drive at a fixed path (`/data/usb` by default) and can also show it to every app as `/sdcard/USB`, so file managers, video players and galleries can use it like normal storage.
+USB EXT4 Mount is a small Android app that mounts an EXT4 USB drive at a fixed path (`/data/usb` by default) and can also show it to every app as `/sdcard/USB`, so file managers, video players and galleries can use it like normal storage.
 
 ## Requirements
 
@@ -29,8 +29,6 @@ Build it yourself (JDK 17 or newer and the Android SDK are needed):
 ./gradlew assembleRelease
 adb install -r app/build/outputs/apk/release/app-release.apk
 ```
-
-The release build is signed with the debug key so it installs directly.
 
 After installing, grant the app root access. KernelSU does not show a prompt: enable it in the KernelSU manager's Superuser list.
 
@@ -60,7 +58,7 @@ The app copies [`usbmount.sh`](app/src/main/assets/usbmount.sh) into its private
 ```sh
 su -c 'sh /data/data/com.example.usbext4mount/files/usbmount.sh list'
 #   list                               USB partitions: DEV|SECTORS|TYPE|LABEL|MOUNTPOINT
-#   wait SECS                          wait for a USB ext partition to appear
+#   wait SECS                          wait for a USB EXT4 partition to appear
 #   mount DEV MNT [OPTS] [FSCK] [NAME] mount DEV at MNT; NAME also shows it as /sdcard/NAME
 #   umount MNT [force]                 unmount MNT and its /sdcard bind
 #   status MNT                         show what is mounted at MNT
@@ -79,7 +77,7 @@ Some details that took digging to get right:
 
 - Mounts do not survive a reboot. Reopen the app, or replug the drive with auto-mount enabled.
 - The desktop ACLs name MediaProvider's uid, which can change after a factory reset.
-- Only ext2/3/4 is supported. Android's own storage handling (vold) covers FAT and exFAT.
+- Only EXT4 is supported. Android's own storage handling (vold) covers FAT and exFAT.
 
 ## License
 
