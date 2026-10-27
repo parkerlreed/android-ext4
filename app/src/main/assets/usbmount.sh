@@ -3,11 +3,14 @@
 #
 #   usbmount.sh list                       one line per USB partition: DEV|SECTORS|TYPE|LABEL|MOUNTPOINT
 #   usbmount.sh wait SECS                  wait until a USB ext partition appears
-#   usbmount.sh mount DEV MNT [OPTS] [FSCK] [NAME]
+#   usbmount.sh mount DEV MNT [OPTS] [FSCK] [NAME] [SCAN]
 #                                          mount DEV (ext2/3/4) at MNT; FSCK=1 runs e2fsck -p first;
-#                                          NAME also shows it to apps as /sdcard/NAME
-#   usbmount.sh umount MNT [force]         unmount MNT (and its /sdcard bind); force closes apps
-#                                          still reading the drive, then detaches if needed
+#                                          NAME also shows it to apps as /sdcard/NAME; SCAN=1 then
+#                                          rescans media so media apps index the drive
+#   usbmount.sh umount MNT [force] [SCAN]  unmount MNT (and its /sdcard bind); force closes apps
+#                                          still reading the drive, then detaches if needed;
+#                                          SCAN=1 rescans media afterwards
+#   usbmount.sh cleanup MNT                detach MNT if its drive was unplugged while mounted
 #   usbmount.sh status MNT                 show what is mounted at MNT
 
 # su usually inherits the app's private mount namespace, so a mount made there
@@ -31,6 +34,9 @@ MEDIA_RW_GID=1023
 # Owner given back to files apps created through /sdcard (uid 1000 is the
 # first user on most Linux desktops).
 DESKTOP_OWNER=1000:1000
+# Which connection of the drive each mount point was mounted from; kept next to
+# this script in the app's private files directory.
+STATE_DIR=${0%/*}/mounts
 
 # Kernel names (sda, sdb, ...) of disks attached over USB.
 usb_disks() {
@@ -125,27 +131,89 @@ cmd_wait() {
     die "no USB ext partition appeared within ${secs}s"
 }
 
+# Unique per connection: the kernel gives each newly attached disk a new
+# diskseq, even when it reuses the same name and MAJ:MIN.
+diskseq_of() {
+    d=$(readlink -f "/sys/dev/block/$1") || return 1
+    [ -e "$d/partition" ] && d=${d%/*}
+    cat "$d/diskseq" 2>/dev/null
+}
+
+state_file() {
+    echo "$STATE_DIR/$(echo "$1" | tr / _)"
+}
+
+# Remember which connection of MAJ:MIN is mounted at MNT.
+record_mount() {
+    mkdir -p "$STATE_DIR" && echo "$2 $(diskseq_of "$2")" > "$(state_file "$1")"
+}
+
+# Is MNT mounted from a drive that has since been unplugged? When the drive is
+# plugged back in it usually gets the same MAJ:MIN, so compare diskseq too.
+is_stale() {
+    cur=$(source_of "$1")
+    [ -n "$cur" ] || return 1
+    [ -e "/sys/dev/block/$cur" ] || return 0
+    f=$(state_file "$1")
+    [ -f "$f" ] || return 1
+    read -r rec_mm rec_seq < "$f"
+    [ "$rec_mm" = "$cur" ] && [ -n "$rec_seq" ] && [ "$rec_seq" != "$(diskseq_of "$cur")" ]
+}
+
+# Lazily detach a dead mount at MNT and its /sdcard binds.
+detach_stale() {
+    old=$(source_of "$1")
+    for mp in $(exposed_of "$old"); do
+        umount -l "$mp"
+    done
+    umount -l "$1" || die "could not detach stale mount at $1"
+    rm -f "$(state_file "$1")"
+}
+
+# Lazily detach /sdcard binds whose drive is gone. These are left behind when a
+# drive is pulled while mounted and the main mount is cleaned up without them.
+detach_orphans() {
+    orphans=
+    while read -r _ _ m _ mp _; do
+        case "$mp" in "$MEDIA_ROOT"/*) [ -e "/sys/dev/block/$m" ] || orphans="$orphans $mp" ;; esac
+    done < /proc/self/mountinfo
+    for mp in $orphans; do
+        echo "I: detaching $mp (its drive was unplugged)"
+        umount -l "$mp"
+    done
+}
+
+cmd_cleanup() {
+    detach_orphans
+    is_stale "$1" || return 0
+    echo "I: the drive at $1 was unplugged while mounted; detaching it"
+    detach_stale "$1"
+    echo "OK: cleaned up $1"
+}
+
 cmd_mount() {
-    dev=$1 mnt=$2 opts=$3 fsck=$4 expose=$5
+    dev=$1 mnt=$2 opts=$3 fsck=$4 expose=$5 scan=$6
     [ -b "$dev" ] || die "not a block device: $dev"
     case "$mnt" in /?*) ;; *) die "mount point must be an absolute path: $mnt" ;; esac
     is_ext "$dev" || echo "W: $dev does not look like ext2/3/4 ($(fs_type "$dev")); trying anyway"
 
     mm=$(majmin "$dev")
     [ -n "$mm" ] || die "cannot find $dev in /sys/class/block"
+    detach_orphans
     cur=$(source_of "$mnt")
+    if [ -n "$cur" ] && is_stale "$mnt"; then
+        # Left over from a drive that was pulled without unmounting.
+        echo "I: detaching stale mount at $mnt (the drive was unplugged)"
+        detach_stale "$mnt"
+        cur=
+    fi
     if [ -n "$cur" ]; then
-        if [ "$cur" = "$mm" ]; then
-            echo "OK: $dev is already mounted at $mnt"
-            [ -n "$expose" ] && cmd_expose "$mnt" "$expose"
-            return 0
-        elif [ ! -e "/sys/dev/block/$cur" ]; then
-            # Left over from a drive that was pulled without unmounting.
-            echo "I: detaching stale mount at $mnt (device $cur is gone)"
-            umount -l "$mnt" || die "could not detach stale mount at $mnt"
-        else
-            die "$mnt is already in use by device $cur"
-        fi
+        [ "$cur" = "$mm" ] || die "$mnt is already in use by device $cur"
+        echo "OK: $dev is already mounted at $mnt"
+        # Mounts made before connections were recorded count as live.
+        [ -f "$(state_file "$mnt")" ] || record_mount "$mnt" "$mm"
+        [ -n "$expose" ] && cmd_expose "$mnt" "$expose" "$scan"
+        return 0
     fi
 
     other=$(mounted_at "$mm")
@@ -183,13 +251,14 @@ cmd_mount() {
         mount -t ext4 "$dev" "$mnt" || die "mount failed (see dmesg)"
     fi
     echo "OK: mounted $dev at $mnt"
-    [ -n "$expose" ] && cmd_expose "$mnt" "$expose"
+    record_mount "$mnt" "$mm"
+    [ -n "$expose" ] && cmd_expose "$mnt" "$expose" "$scan"
     cmd_status "$mnt"
 }
 
 # Bind MNT into MediaProvider's backing directory so apps see it as /sdcard/NAME.
 cmd_expose() {
-    mnt=$1 name=$2
+    mnt=$1 name=$2 scan=$3
     case "$name" in */*|.|..|"") die "invalid /sdcard folder name: $name" ;; esac
     target=$MEDIA_ROOT/$name
     mm=$(source_of "$mnt")
@@ -212,7 +281,10 @@ cmd_expose() {
     done
     [ "$unlabelled" -gt 0 ] && echo "W: $unlabelled top-level entries have a foreign SELinux label; fix with: chcon -R $MEDIA_CONTEXT <dir>"
     echo "OK: visible to apps at /sdcard/$name"
-    rescan
+    # Off by default: indexing a drive with many files ties up MediaProvider,
+    # which also serves /sdcard, and apps querying it can freeze.
+    [ "$scan" = 1 ] && rescan
+    return 0
 }
 
 # Ask MediaProvider to re-index shared storage in the background, so media apps
@@ -280,7 +352,7 @@ give_back() {
 }
 
 cmd_umount() {
-    mnt=$1 force=$2
+    mnt=$1 force=$2 scan=$3
     [ "$force" = lazy ] && force=force
     mm=$(source_of "$mnt")
     [ -n "$mm" ] || { echo "OK: nothing mounted at $mnt"; return 0; }
@@ -322,7 +394,8 @@ cmd_umount() {
         }
     fi
     echo "OK: unmounted $mnt"
-    [ -n "$exposed" ] && rescan
+    rm -f "$(state_file "$mnt")"
+    [ -n "$exposed" ] && [ "$scan" = 1 ] && rescan
     return 0
 }
 
@@ -345,8 +418,9 @@ cmd_status() {
 case "$1" in
     list) cmd_list ;;
     wait) cmd_wait "$2" ;;
-    mount) cmd_mount "$2" "$3" "$4" "$5" "$6" ;;
-    umount) cmd_umount "$2" "$3" ;;
+    mount) cmd_mount "$2" "$3" "$4" "$5" "$6" "$7" ;;
+    umount) cmd_umount "$2" "$3" "$4" ;;
+    cleanup) cmd_cleanup "$2" ;;
     status) cmd_status "$2" ;;
-    *) die "usage: $0 list|wait|mount|umount|status ..." ;;
+    *) die "usage: $0 list|wait|mount|umount|cleanup|status ..." ;;
 esac

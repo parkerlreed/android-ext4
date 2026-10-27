@@ -64,6 +64,9 @@ class MountViewModel(app: Application) : AndroidViewModel(app) {
     /** Also bind the drive to /sdcard/[EXPOSE_NAME] so media apps can read it. */
     var expose by mutableStateOf(prefs.getBoolean(KEY_EXPOSE, true))
         private set
+    /** Rescan media after mounting/unmounting so media apps index the drive. Slow on big drives. */
+    var indexMedia by mutableStateOf(prefs.getBoolean(KEY_INDEX_MEDIA, false))
+        private set
 
     val selected get() = partitions.firstOrNull { it.device == selectedDevice }
     val mounted get() = partitions.firstOrNull { it.mountPoint == mountPoint.trim() }
@@ -92,6 +95,11 @@ class MountViewModel(app: Application) : AndroidViewModel(app) {
         prefs.edit().putBoolean(KEY_AUTO_MOUNT, value).apply()
     }
 
+    fun updateIndexMedia(value: Boolean) {
+        indexMedia = value
+        prefs.edit().putBoolean(KEY_INDEX_MEDIA, value).apply()
+    }
+
     fun updateExpose(value: Boolean) {
         expose = value
         prefs.edit().putBoolean(KEY_EXPOSE, value).apply()
@@ -118,8 +126,9 @@ class MountViewModel(app: Application) : AndroidViewModel(app) {
         val opts = options.trim()
         val check = if (fsck) "1" else "0"
         val exposeAs = if (expose) EXPOSE_NAME else ""
+        val scan = if (indexMedia) "1" else "0"
         background("Mounting ${partition.name}") {
-            val result = runScript("mount", partition.device, target, opts, check, exposeAs)
+            val result = runScript("mount", partition.device, target, opts, check, exposeAs, scan)
             show(if (result.ok) "Mounted at $target" else failure(result, "Mount failed"))
         }
     }
@@ -127,8 +136,9 @@ class MountViewModel(app: Application) : AndroidViewModel(app) {
     /** [force] closes apps still reading the drive, then detaches it if it is still busy. */
     fun unmount(force: Boolean = false) {
         val target = mountPoint.trim()
+        val scan = if (indexMedia) "1" else "0"
         background(if (force) "Closing apps and unmounting" else "Unmounting") {
-            val result = if (force) runScript("umount", target, "force") else runScript("umount", target)
+            val result = runScript("umount", target, if (force) "force" else "", scan)
             when {
                 result.lines.any { it.startsWith("W: still busy") } ->
                     show("Detached. Wait a few seconds before removing the drive")
@@ -150,12 +160,13 @@ class MountViewModel(app: Application) : AndroidViewModel(app) {
         val opts = options.trim()
         val check = if (fsck) "1" else "0"
         val exposeAs = if (expose) EXPOSE_NAME else ""
+        val scan = if (indexMedia) "1" else "0"
         background(WAITING_FOR_DRIVE) {
             // The block device shows up a moment after the USB attach event.
             val waited = runScript("wait", "20")
             val device = waited.lines.lastOrNull()?.takeIf { waited.ok }
             if (device != null) {
-                val result = runScript("mount", device, target, opts, check, exposeAs)
+                val result = runScript("mount", device, target, opts, check, exposeAs, scan)
                 show(if (result.ok) "Auto-mounted at $target" else failure(result, "Auto-mount failed"))
             } else {
                 show("No ext partition found on the new drive")
@@ -176,6 +187,9 @@ class MountViewModel(app: Application) : AndroidViewModel(app) {
         val target = mountPoint.trim()
         worker.execute {
             val updates = mutableListOf<() -> Unit>()
+            // Detach the mount first if its drive was unplugged while mounted.
+            val cleanup = RootShell.run("sh", script.absolutePath, "cleanup", target)
+            if (cleanup.lines.isNotEmpty()) updates += { log += cleanup.lines }
             Worker(updates).action()
             val listing = RootShell.run("sh", script.absolutePath, "list")
             val status = RootShell.run("sh", script.absolutePath, "status", target)
@@ -224,6 +238,7 @@ class MountViewModel(app: Application) : AndroidViewModel(app) {
         private const val KEY_FSCK = "fsck"
         private const val KEY_AUTO_MOUNT = "auto_mount"
         private const val KEY_EXPOSE = "expose"
+        private const val KEY_INDEX_MEDIA = "index_media"
         const val EXPOSE_NAME = "USB"
         private const val WAITING_FOR_DRIVE = "Waiting for USB drive"
         private const val DEFAULT_MOUNT_POINT = "/data/usb"

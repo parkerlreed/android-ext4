@@ -14,7 +14,8 @@ USB EXT4 Mount is a small Android app that mounts an EXT2/3/4 USB drive at a fix
 
 - Lists USB partitions with label, size and filesystem type
 - Mounts in the global mount namespace, so the mount is visible to adb, root apps and every other app (not just this one)
-- **Show in /sdcard**: binds the drive to `/sdcard/USB` with the right SELinux label, then rescans media so gallery and music apps index it
+- **Show in /sdcard**: binds the drive to `/sdcard/USB` with the right SELinux label, so file managers and other apps can open its files
+- **Index for media apps** (off by default): rescans media after mounting so galleries, music players and pickers list the drive. Leave it off for drives with many files, such as game libraries: indexing ties up MediaProvider, which also serves `/sdcard`, and apps that query it can freeze
 - Optional `e2fsck -p` before mounting, when the ROM ships `e2fsck`
 - Auto-mount when a drive is plugged in, and live refresh on plug and unplug
 - Safe unmount: tells you which apps are still using the drive and can close them for you
@@ -59,8 +60,11 @@ The app copies [`usbmount.sh`](app/src/main/assets/usbmount.sh) into its private
 su -c 'sh /data/data/io.github.parkerlreed.usbext4mount/files/usbmount.sh list'
 #   list                               USB partitions: DEV|SECTORS|TYPE|LABEL|MOUNTPOINT
 #   wait SECS                          wait for a USB EXT4 partition to appear
-#   mount DEV MNT [OPTS] [FSCK] [NAME] mount DEV at MNT; NAME also shows it as /sdcard/NAME
-#   umount MNT [force]                 unmount MNT and its /sdcard bind
+#   mount DEV MNT [OPTS] [FSCK] [NAME] [SCAN]
+#                                      mount DEV at MNT; NAME also shows it as /sdcard/NAME;
+#                                      SCAN=1 rescans media afterwards
+#   umount MNT [force] [SCAN]          unmount MNT and its /sdcard bind
+#   cleanup MNT                        detach MNT if its drive was unplugged while mounted
 #   status MNT                         show what is mounted at MNT
 ```
 

@@ -311,6 +311,14 @@ private fun SettingsCard(vm: MountViewModel) {
                 checked = vm.expose,
                 onCheckedChange = vm::updateExpose,
             )
+            if (vm.expose) {
+                SwitchRow(
+                    title = "Index for media apps",
+                    subtitle = "Rescan after mounting so galleries and pickers list the drive. Slow on drives with many files",
+                    checked = vm.indexMedia,
+                    onCheckedChange = vm::updateIndexMedia,
+                )
+            }
             SwitchRow(
                 title = "Auto-mount on attach",
                 subtitle = "Mounts the first ext partition when a drive is plugged in",
