@@ -260,6 +260,7 @@ cmd_mount() {
 cmd_expose() {
     mnt=$1 name=$2 scan=$3
     case "$name" in */*|.|..|"") die "invalid /sdcard folder name: $name" ;; esac
+    relabel "$mnt"
     target=$MEDIA_ROOT/$name
     mm=$(source_of "$mnt")
     cur=$(source_of "$target")
@@ -275,16 +276,22 @@ cmd_expose() {
         chcon "$(stat -c %C "$MEDIA_ROOT/Download")" "$target"
     fi
     mount --bind "$mnt" "$target" || die "bind to $target failed"
-    unlabelled=0
-    for f in "$mnt"/* "$mnt"/.[!.]*; do
-        [ -e "$f" ] && [ "$(stat -c %C "$f")" = u:object_r:unlabeled:s0 ] && unlabelled=$((unlabelled + 1))
-    done
-    [ "$unlabelled" -gt 0 ] && echo "W: $unlabelled top-level entries have a foreign SELinux label; fix with: chcon -R $MEDIA_CONTEXT <dir>"
     echo "OK: visible to apps at /sdcard/$name"
     # Off by default: indexing a drive with many files ties up MediaProvider,
     # which also serves /sdcard, and apps querying it can freeze.
     [ "$scan" = 1 ] && rescan
     return 0
+}
+
+# defcontext only covers files with no SELinux label. Files written by a desktop
+# with SELinux (Fedora labels them unlabeled_t) or by an earlier mount without
+# defcontext carry their own label, which MediaProvider may not read, so they
+# are missing from /sdcard. Give them the media label.
+relabel() {
+    n=$(find "$1" -xdev ! -context "$MEDIA_CONTEXT" -print 2>/dev/null | wc -l)
+    [ "$n" -gt 0 ] || return 0
+    find "$1" -xdev ! -context "$MEDIA_CONTEXT" -exec chcon -h "$MEDIA_CONTEXT" {} + 2>/dev/null
+    echo "I: gave the media label to $n file(s) with a foreign SELinux label"
 }
 
 # Ask MediaProvider to re-index shared storage in the background, so media apps
