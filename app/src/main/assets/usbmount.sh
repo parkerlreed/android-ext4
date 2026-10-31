@@ -29,6 +29,10 @@ die() { echo "E: $*"; exit 1; }
 # /sdcard is served by MediaProvider from this directory, and MediaProvider may
 # only read files with this SELinux type.
 MEDIA_ROOT=/data/media/0
+# Where MediaProvider reads MEDIA_ROOT from. On older Samsung ROMs this is an
+# sdcardfs view of /data/media, which refuses to cross into a mount made below
+# it ("Cross-device link"), so the drive is bound onto the view itself there.
+PASS_THROUGH=/mnt/pass_through/0/emulated/0
 MEDIA_CONTEXT=u:object_r:media_rw_data_file:s0
 MEDIA_RW_GID=1023
 # Owner given back to files apps created through /sdcard (uid 1000 is the
@@ -164,7 +168,7 @@ is_stale() {
 detach_stale() {
     old=$(source_of "$1")
     for mp in $(exposed_of "$old"); do
-        umount -l "$mp"
+        [ "$(source_of "$mp")" = "$old" ] && umount -l "$mp"
     done
     umount -l "$1" || die "could not detach stale mount at $1"
     rm -f "$(state_file "$1")"
@@ -175,9 +179,10 @@ detach_stale() {
 detach_orphans() {
     orphans=
     while read -r _ _ m _ mp _; do
-        case "$mp" in "$MEDIA_ROOT"/*) [ -e "/sys/dev/block/$m" ] || orphans="$orphans $mp" ;; esac
+        case "$mp" in "$MEDIA_ROOT"/* | "$PASS_THROUGH"/*) [ -e "/sys/dev/block/$m" ] || orphans="$orphans $mp" ;; esac
     done < /proc/self/mountinfo
     for mp in $orphans; do
+        [ -n "$(source_of "$mp")" ] || continue
         echo "I: detaching $mp (its drive was unplugged)"
         umount -l "$mp"
     done
@@ -222,10 +227,18 @@ cmd_mount() {
     if [ "$fsck" = 1 ]; then
         if command -v e2fsck >/dev/null 2>&1; then
             echo "I: e2fsck -p $dev"
-            e2fsck -p "$dev"
+            out=$(e2fsck -p "$dev" 2>&1)
             rc=$?
+            [ -n "$out" ] && echo "$out"
             # 0 = clean, 1 = errors fixed, 2 = fixed but reboot advised; >= 4 = unfixed errors.
-            [ "$rc" -ge 4 ] && die "e2fsck exit code $rc; run 'e2fsck -f $dev' manually"
+            if [ "$rc" -ge 4 ]; then
+                case "$out" in
+                    # Older ROMs ship an e2fsck that predates features newer mkfs.ext4
+                    # turns on (such as orphan_file); the kernel can still mount it.
+                    *"unsupported feature"*) echo "W: this e2fsck is too old for the filesystem's features; skipping check" ;;
+                    *) die "e2fsck exit code $rc; run 'e2fsck -f $dev' manually" ;;
+                esac
+            fi
         else
             echo "W: e2fsck not found, skipping check"
         fi
@@ -262,8 +275,10 @@ cmd_expose() {
     case "$name" in */*|.|..|"") die "invalid /sdcard folder name: $name" ;; esac
     relabel "$mnt"
     target=$MEDIA_ROOT/$name
+    bind=$target
+    on_sdcardfs && bind=$PASS_THROUGH/$name
     mm=$(source_of "$mnt")
-    cur=$(source_of "$target")
+    cur=$(source_of "$bind")
     if [ -n "$cur" ]; then
         [ "$cur" = "$mm" ] && { echo "OK: already visible at /sdcard/$name"; return 0; }
         die "/sdcard/$name is already a mount of device $cur"
@@ -275,7 +290,7 @@ cmd_expose() {
         chmod 2770 "$target"
         chcon "$(stat -c %C "$MEDIA_ROOT/Download")" "$target"
     fi
-    mount --bind "$mnt" "$target" || die "bind to $target failed"
+    mount --bind "$mnt" "$bind" || die "bind to $bind failed"
     echo "OK: visible to apps at /sdcard/$name"
     # Off by default: indexing a drive with many files ties up MediaProvider,
     # which also serves /sdcard, and apps querying it can freeze.
@@ -301,17 +316,28 @@ rescan() {
     echo "I: media rescan started"
 }
 
-# Mount points of MAJ:MIN under MediaProvider's directory (our /sdcard binds).
+# Is MediaProvider's view of MEDIA_ROOT an sdcardfs mount?
+on_sdcardfs() {
+    while read -r line; do
+        case "$line" in *" ${PASS_THROUGH%/0} "*" - sdcardfs "*) return 0 ;; esac
+    done < /proc/self/mountinfo
+    return 1
+}
+
+# Mount points of MAJ:MIN where we bound it for /sdcard. Copies elsewhere
+# (/mnt/runtime, and /mnt/pass_through on FUSE devices) follow these.
 exposed_of() {
     while read -r _ _ m _ mp _; do
         [ "$m" = "$1" ] || continue
-        case "$mp" in "$MEDIA_ROOT"/*) echo "$mp" ;; esac
+        case "$mp" in "$MEDIA_ROOT"/* | "$PASS_THROUGH"/*) echo "$mp" ;; esac
     done < /proc/self/mountinfo
 }
 
 # Unmount the /sdcard binds, then MNT. The copies under /mnt/pass_through follow the binds.
 umount_all() {
     for mp in $(exposed_of "$mm"); do
+        # Unmounting one bind can take its propagated copies with it.
+        [ "$(source_of "$mp")" = "$mm" ] || continue
         umount ${1:+"$1"} "$mp" 2>/dev/null || return 1
     done
     umount ${1:+"$1"} "$mnt" 2>/dev/null
@@ -419,7 +445,9 @@ cmd_status() {
         while [ $# -gt 0 ] && [ "$1" != "-" ]; do shift; done
         echo "I: $3 on $mp type $2 ($opts)"
     done < /proc/self/mountinfo
-    df -h "$mnt" | tail -n 1 | sed 's/^/I: /'
+    # df may name another mount of the same drive (such as a /sdcard copy).
+    set -- $(df -h "$mnt" | tail -n 1)
+    echo "I: $1 $2 $3 $4 $5 $mnt"
 }
 
 case "$1" in
